@@ -30,8 +30,10 @@ module Jazzy
     attr_accessor :docset_path
     attr_accessor :source_directory
     attr_accessor :excluded_files
+    attr_accessor :custom_categories
     attr_accessor :template_directory
     attr_accessor :swift_version
+    attr_accessor :assets_directory
 
     def initialize
       PodspecDocumenter.configure(self, Dir['*.podspec{,.json}'].first)
@@ -47,8 +49,10 @@ module Jazzy
       self.skip_undocumented = false
       self.source_directory = Pathname.pwd
       self.excluded_files = []
+      self.custom_categories = {}
       self.template_directory = Pathname(__FILE__).parent + 'templates'
       self.swift_version = '1.2'
+      self.assets_directory = Pathname(__FILE__).parent + 'assets'
     end
 
     def podspec=(podspec)
@@ -180,6 +184,11 @@ module Jazzy
           config.swift_version = swift_version
         end
 
+        opt.on('--assets-directory DIRPATH', 'The directory that contains ' \
+               'the assets (CSS, JS, images)  to use') do |assets_directory|
+          config.assets_directory = Pathname(assets_directory)
+        end
+
         opt.on('--readme FILEPATH',
                'The path to a markdown README file') do |readme|
           config.readme_path = Pathname(readme)
@@ -188,6 +197,14 @@ module Jazzy
         opt.on('-e', '--exclude file1,file2,…fileN', Array,
                'Files to be excluded from documentation') do |files|
           config.excluded_files = files.map { |f| File.expand_path(f) }
+        end
+
+        opt.on('--categories file.json', 'JSON file with custom top-level groupings') do |file|
+          config.custom_categories = case File.extname(file)
+            when '.json'        then JSON.parse(File.read(file))
+            when '.yaml','.yml' then YAML.load(File.read(file))
+            else raise "File provided for --categories must be .yaml or .json"
+          end
         end
 
         opt.on('-v', '--version', 'Print version number') do

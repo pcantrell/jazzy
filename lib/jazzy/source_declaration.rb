@@ -14,6 +14,7 @@ module Jazzy
     attr_accessor :name
     attr_accessor :declaration
     attr_accessor :abstract
+    attr_accessor :default_impl_abstract
     attr_accessor :discussion
     attr_accessor :return
     attr_accessor :children
@@ -23,6 +24,7 @@ module Jazzy
     attr_accessor :access_control_level
     attr_accessor :start_line
     attr_accessor :end_line
+    attr_accessor :nav_order
 
     def overview
       "#{abstract}\n\n#{discussion}".strip

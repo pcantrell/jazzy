@@ -15,17 +15,49 @@ module Jazzy
     @documented_count = 0
     @undocumented_tokens = []
 
-    # Group root-level docs by type and add as children to a group doc element
-    def self.group_docs(docs, type)
-      group, docs = docs.partition { |doc| doc.type == type }
-      docs << SourceDeclaration.new.tap do |sd|
+    # Group root-level docs by custom categories (if any) and type
+    def self.group_docs(docs)
+      custom_categories, docs = group_custom_categories(docs)
+      type_categories, uncategorized = group_type_categories(
+        docs, custom_categories.any? ? "Other " : "")
+      custom_categories + type_categories + uncategorized
+    end
+
+    def self.group_custom_categories(docs)
+      group = Config.instance.custom_categories.map do |category|
+        children = category['children'].flat_map do |name|
+          docs_with_name, docs = docs.partition { |doc| doc.name == name }
+          if docs_with_name.empty?
+            STDERR.puts "WARNING: No documented top-level declarations match "\
+                        "name \"#{name}\" specified in categories file"
+          end
+          docs_with_name
+        end
+        # Category config overrides alphabetization
+        children.each.with_index { |child, i| child.nav_order = i }
+        make_group(children, category["name"], "")
+      end
+      [group.compact, docs]
+    end
+
+    def self.group_type_categories(docs, type_category_prefix)
+      group = SourceDeclaration::Type.all.map do |type|
+        children, docs = docs.partition { |doc| doc.type == type }
+        make_group(
+          children,
+          type_category_prefix + type.plural_name, 
+          "The following #{type.plural_name.downcase} are available globally.")
+      end
+      [group.compact, docs]
+    end
+
+    def self.make_group(group, name, abstract)
+      SourceDeclaration.new.tap do |sd|
         sd.type     = SourceDeclaration::Type.overview
-        sd.name     = type.plural_name
-        sd.abstract = "The following #{type.plural_name.downcase} are " \
-                      'available globally.'
+        sd.name     = name
+        sd.abstract = abstract
         sd.children = group
-      end if group.count > 0
-      docs
+      end unless group.empty?
     end
 
     # rubocop:disable Metrics/MethodLength
@@ -33,11 +65,10 @@ module Jazzy
     # @return [Hash] input docs with URLs
     def self.make_doc_urls(docs, parents)
       docs.each do |doc|
-        if doc.children.count > 0
-          # Create HTML page for this doc if it has children
-          parents_slash = parents.count > 0 ? '/' : ''
-          doc.url = parents.join('/') + parents_slash + doc.name + '.html'
-          doc.children = make_doc_urls(doc.children, parents + [doc.name])
+        if parents.empty? || doc.children.count > 0
+          # Create HTML page for this doc if it has children or is root-level
+          doc.url = (subdir_for_doc(doc, parents) + [doc.name + '.html']).join('/')
+          doc.children = make_doc_urls(doc.children, parents + [doc])
         else
           # Don't create HTML page for this doc if it doesn't have children
           # Instead, make its link a hash-link on its parent's page
@@ -58,11 +89,23 @@ module Jazzy
               'project. If this token is declared in an `#if` block, please ' \
               'ignore this message.'
           end
-          doc.url = parents.join('/') + '.html#/' + id
+          doc.url = parents.last.url + '#/' + id
         end
       end
     end
     # rubocop:enable Metrics/MethodLength
+
+    # Determine the subdirectory in which a doc should be placed
+    def self.subdir_for_doc(doc, parents)
+      # To group docs by category file instead of declaration type,
+      # return parents.map(&:name)
+
+      if doc.type.name
+        [doc.type.plural_name]
+      else
+        []
+      end
+    end
 
     # Run sourcekitten with given arguments and return STDOUT
     def self.run_sourcekitten(arguments)
@@ -224,11 +267,72 @@ module Jazzy
         (@undocumented_tokens.count + @documented_count)
     end
 
+    # Merges multiple extensions of the same entity into a single document.
+    #
+    # Merges extensions into the protocol/class/struct/enum they extend, if it
+    # occurs in the same project.
+    #
+    # Merges redundant declarations when documenting podspecs.
     def self.deduplicate_declarations(declarations)
-      duplicates = declarations.group_by { |d| [d.usr, d.type.kind] }.values
-      duplicates.map do |decls|
-        decls.first.tap do |d|
-          d.children = deduplicate_declarations(decls.flat_map(&:children).uniq)
+      duplicate_groups = declarations.group_by { |d| deduplication_key(d) }.values
+
+      duplicate_groups.map do |group|
+        # Put extended type (if present) before extensions
+        merge_declarations(group)
+      end
+    end
+
+    # Two declarations get merged if they have the same deduplication key.
+    def self.deduplication_key(decl)
+      if decl.type.extensible? || decl.type.extension?
+        [decl.usr]
+      else
+        [decl.usr, decl.type.kind]
+      end
+    end
+
+    # Merges all of the given types and extensions into a single document.
+    def self.merge_declarations(decls)
+      extensions, typedecls = decls.partition { |d| d.type.extension? }
+
+      if typedecls.size > 1
+        warn "Found conflicting type declarations with the same name, which " +
+          "may indicate a build issue or a bug in Jazzy: " +
+          typedecls.map { |t| "#{t.type.name.downcase} #{t.name}" }.join(', ')
+      end
+      typedecl = typedecls.first
+
+      if typedecl && typedecl.type.protocol?
+        merge_default_implementations_into_protocol(typedecl, extensions)
+        extensions.reject! { |ext| ext.children.empty? }
+
+        ext_mark = SourceMark.new('- Extension Members')
+        extensions.each do |ext|
+          ext.children.each do |ext_member|
+            ext_member.mark = ext_mark
+          end
+        end
+      end
+
+      decls = typedecls + extensions
+      decls.first.tap do |d|
+        d.children = deduplicate_declarations(decls.flat_map(&:children).uniq)
+      end
+    end
+
+    # If any of the extensions provide default implementations for methods in the
+    # given protocol, merge those members into the protocol doc instead of keeping
+    # them on the extension.
+    def self.merge_default_implementations_into_protocol(protocol, extensions)
+      protocol.children.each do |proto_method|
+        extensions.each do |ext|
+          defaults, ext.children = ext.children.partition do |ext_member|
+            ext_member.name == proto_method.name
+          end
+          unless defaults.empty?
+            proto_method.default_impl_abstract =
+              defaults.flat_map { |d| [d.abstract, d.discussion] }.join("\n\n")
+          end
         end
       end
     end
@@ -249,9 +353,7 @@ module Jazzy
       sourcekitten_json = filter_excluded_files(JSON.parse(sourcekitten_output))
       docs = make_source_declarations(sourcekitten_json)
       docs = deduplicate_declarations(docs)
-      SourceDeclaration::Type.all.each do |type|
-        docs = group_docs(docs, type)
-      end
+      docs = group_docs(docs)
       # Remove top-level enum cases because it means they have an ACL lower
       # than min_acl
       docs = docs.reject { |doc| doc.type.enum_element? }

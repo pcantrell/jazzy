@@ -31,7 +31,7 @@ module Jazzy
       docs.map do |doc|
         {
           section: doc.name,
-          children: doc.children.sort_by(&:name).map do |child|
+          children: doc.children.sort_by(&:name).sort_by(&:nav_order).map do |child|
             { name: child.name, url: child.url }
           end,
         }
@@ -70,25 +70,25 @@ module Jazzy
     # @param [Config] options Build options
     # @param [Array] doc_structure @see #doc_structure_for_docs
     def self.build_docs(output_dir, docs, source_module)
-      each_doc(output_dir, docs) do |doc, path, depth|
+      each_doc(output_dir, docs) do |doc, path|
         prepare_output_dir(path.parent, false)
-        path_to_root = ['../'].cycle(depth).to_a.join('')
+        depth = path.relative_path_from(output_dir).each_filename.count - 1
+        path_to_root = '../' * depth
         path.open('w') do |file|
           file.write(document(source_module, doc, path_to_root))
         end
       end
     end
 
-    def self.each_doc(output_dir, docs, depth = 0, &block)
+    def self.each_doc(output_dir, docs, &block)
       docs.each do |doc|
         next if doc.name != 'index' && doc.children.count == 0
-        path = output_dir + "#{doc.name}.html"
-        block.call(doc, path, depth)
+        path = output_dir + (doc.url || "#{doc.name}.html")   # Assumes URL is relative to documentation root!
+        block.call(doc, path)
         next if doc.name == 'index'
         each_doc(
-          output_dir + doc.name,
+          output_dir,
           doc.children,
-          depth + 1,
           &block
         )
       end
@@ -160,8 +160,7 @@ module Jazzy
     end
 
     def self.copy_assets(destination)
-      origin = Pathname(__FILE__).parent + '../../lib/jazzy/assets/.'
-      FileUtils.cp_r(origin, destination)
+      FileUtils.cp_r(Config.instance.assets_directory.children, destination)
       Pathname.glob(destination + 'css/**/*.scss').each do |scss|
         contents = scss.read
         css = Sass::Engine.new(contents, syntax: :scss).render
@@ -229,6 +228,7 @@ module Jazzy
       }
       gh_token_url = gh_token_url(item, source_module)
       item_render[:github_token_url] = gh_token_url
+      item_render[:default_impl_abstract] = Jazzy.markdown.render(item.default_impl_abstract) if item.default_impl_abstract
       item_render[:return] = Jazzy.markdown.render(item.return) if item.return
       item_render[:parameters] = item.parameters if item.parameters.any?
       item_render[:url] = item.url if item.children.any?
@@ -283,6 +283,7 @@ module Jazzy
       doc[:name] = doc_model.name
       doc[:kind] = doc_model.type.name
       doc[:dash_type] = doc_model.type.dash_type
+      doc[:declaration] = doc_model.declaration
       doc[:overview] = Jazzy.markdown.render(doc_model.overview)
       doc[:structure] = source_module.doc_structure
       doc[:tasks] = render_tasks(source_module, doc_model.children)
