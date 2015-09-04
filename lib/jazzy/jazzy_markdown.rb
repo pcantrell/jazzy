@@ -56,21 +56,21 @@ module Jazzy
 
     ELIDED_LI_TOKEN = '7wNVzLB0OYPL2eGlPKu8q4vITltqh0Y6DPZf659TPMAeYh49o'.freeze
 
-    def list_item(text, _list_type)
-      return ELIDED_LI_TOKEN if text =~ SPECIAL_LIST_TYPE_REGEX
-      str = '<li>'
-      str << text.strip
-      str << "</li>\n"
-    end
+    # def list_item(text, _list_type)
+    #   return ELIDED_LI_TOKEN if text =~ SPECIAL_LIST_TYPE_REGEX
+    #   str = '<li>'
+    #   str << text.strip
+    #   str << "</li>\n"
+    # end
 
-    def list(text, list_type)
-      elided = text.gsub!(ELIDED_LI_TOKEN, '')
-      return if text =~ /\A\s*\Z/ && elided
-      str = "\n"
-      str << (list_type == :ordered ? "<ol>\n" : "<ul>\n")
-      str << text
-      str << (list_type == :ordered ? "</ol>\n" : "</ul>\n")
-    end
+    # def list(text, list_type)
+    #   elided = text.gsub!(ELIDED_LI_TOKEN, '')
+    #   return if text =~ /\A\s*\Z/ && elided
+    #   str = "\n"
+    #   str << (list_type == :ordered ? "<ol>\n" : "<ul>\n")
+    #   str << text
+    #   str << (list_type == :ordered ? "</ol>\n" : "</ul>\n")
+    # end
 
     OPTIONS = {
       autolink: true,
